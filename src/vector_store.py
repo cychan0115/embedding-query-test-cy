@@ -187,18 +187,76 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Failed to index document {doc_id}: {e}")
             return False
+
+    def index_document_via_api(self, doc_id: str, text: str, embedding: List[float],
+                               category: str, sub_category: str,
+                               api_url: str = "http://127.0.0.1:8000/aiplatform/ddg/insert_internal_test",
+                               metadata: Optional[Dict] = None) -> bool:
+        """
+        Index a single document via local API instead of direct ES.
+        通过本地 API 索引单个文档（而非直接连接 ES）。
+        
+        Args:
+            doc_id: Document ID / 文档 ID
+            text: Original text / 原始文本
+            embedding: Vector embedding / 向量
+            category: Category / 分类
+            sub_category: Sub-category / 子分类
+            api_url: Insert API endpoint / 插入 API 端点
+            metadata: Additional metadata / 额外元数据
+        
+        Returns:
+            bool: True if indexed successfully / 是否索引成功
+        """
+        try:
+            import requests
+            
+            record = {
+                "content": text,
+                "metadata": {
+                    "doc_id": doc_id,
+                    "category": category,
+                    "sub_category": sub_category,
+                    **(metadata or {})
+                },
+                "kb_name": "folder_list_embedding",
+                "user_id": "cy",
+                "project_id": "d19bcdeb795ce5999623573c50554524",
+                "kb_type": "es",
+                "im_name": "gpt-5-2025-08-07",
+                "embed_model_name": "Text-Embedding-Ada-002",
+                "action_type": "insert",
+                "embedding": embedding
+            }
+            
+            response = requests.post(
+                api_url,
+                json={"json_data": [record]},
+                timeout=30
+            )
+            response.raise_for_status()
+            logger.debug(f"Indexed document via API: {doc_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to index document {doc_id} via API: {e}")
+            return False
     
-    def index_batch(self, documents: List[Dict]) -> int:
+    def index_batch(self, documents: List[Dict], use_api: bool = False) -> int:
         """
         Batch index multiple documents.
         批量索引多个文档。
         
         Args:
             documents: List of documents, each with keys: text, embedding, category, sub_category
+            use_api: If True, use local API instead of direct ES / 是否使用本地 API
         
         Returns:
             int: Number of successfully indexed documents / 成功索引数量
         """
+        if use_api:
+            return self.index_batch_via_api(documents)
+        
         success_count = 0
         for i, doc in enumerate(documents):
             try:
@@ -219,6 +277,56 @@ class VectorStore:
         self.es_client.indices.refresh(index=self.index_name)
         logger.info(f"Batch indexed {success_count}/{len(documents)} documents")
         return success_count
+
+    def index_batch_via_api(self, documents: List[Dict], 
+                            api_url: str = "http://127.0.0.1:8000/aiplatform/ddg/insert_internal_test") -> int:
+        """
+        Batch index multiple documents via local API.
+        通过本地 API 批量索引文档。
+        
+        Args:
+            documents: List of documents, each with keys: text, embedding, category, sub_category
+            api_url: Insert API endpoint / 插入 API 端点
+        
+        Returns:
+            int: Number of successfully indexed documents / 成功索引数量
+        """
+        import requests
+        
+        records = []
+        for i, doc in enumerate(documents):
+            doc_id = f"seed_{i}_{doc['category']}"
+            record = {
+                "content": doc["text"],
+                "metadata": {
+                    "doc_id": doc_id,
+                    "category": doc["category"],
+                    "sub_category": doc.get("sub_category", ""),
+                    **doc.get("metadata", {})
+                },
+                "kb_name": "folder_list_embedding",
+                "user_id": "cy",
+                "project_id": "d19bcdeb795ce5999623573c50554524",
+                "kb_type": "es",
+                "im_name": "gpt-5-2025-08-07",
+                "embed_model_name": "Text-Embedding-Ada-002",
+                "action_type": "insert",
+                "embedding": doc["embedding"]
+            }
+            records.append(record)
+        
+        try:
+            response = requests.post(
+                api_url,
+                json={"json_data": records},
+                timeout=60
+            )
+            response.raise_for_status()
+            logger.info(f"Batch indexed {len(records)} documents via API")
+            return len(records)
+        except Exception as e:
+            logger.error(f"Batch insert via API failed: {e}")
+            return 0
     
     def search_similar(self, embedding: List[float], top_k: int = 5) -> List[Dict]:
         """
